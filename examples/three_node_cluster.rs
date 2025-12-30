@@ -35,18 +35,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Define the cluster topology
     let peers = HashMap::from([
-        (
-            "node1".to_string(),
-            "127.0.0.1:5001".parse::<SocketAddr>()?,
-        ),
-        (
-            "node2".to_string(),
-            "127.0.0.1:5002".parse::<SocketAddr>()?,
-        ),
-        (
-            "node3".to_string(),
-            "127.0.0.1:5003".parse::<SocketAddr>()?,
-        ),
+        ("node1".to_string(), "127.0.0.1:5001".parse::<SocketAddr>()?),
+        ("node2".to_string(), "127.0.0.1:5002".parse::<SocketAddr>()?),
+        ("node3".to_string(), "127.0.0.1:5003".parse::<SocketAddr>()?),
     ]);
 
     // Create configurations for each node
