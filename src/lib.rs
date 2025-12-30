@@ -2,7 +2,7 @@
 pub mod error;
 pub mod raft_node;
 pub mod state_machine;
-use std::time::Duration;
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
 use tokio::{
@@ -17,7 +17,6 @@ use bincode::{Decode, Encode, config};
 
 use crate::error::RaftResult;
 
-// Request/Response structs - make fields pub so they can be accessed
 #[derive(Debug, Encode, Decode, Clone)]
 pub struct VoteRequest {
     pub term: u64,
@@ -48,7 +47,6 @@ pub struct AppendResponse {
     pub success: bool,
 }
 
-// Enums for wire protocol
 #[derive(Debug, Encode, Decode, Clone)]
 pub enum RaftRequest {
     Vote(VoteRequest),
@@ -62,10 +60,36 @@ pub enum RaftResponse {
 }
 
 #[async_trait]
-pub trait Rpc: Send + Sync {
-    async fn send(&self, peer: String, message: RaftMessage) -> RaftResult<()>;
-    async fn call_vote(&self, peer: String, request: RaftMessage) -> RaftResult<RaftMessage>;
-    async fn call_append(&self, peer: String, request: RaftMessage) -> RaftResult<RaftMessage>;
+pub trait Transport: Send + Sync {
+    async fn call_vote(&self, peer: &str, request: VoteRequest) -> RaftResult<VoteResponse>;
+    async fn call_append(&self, peer: &str, request: AppendEntries) -> RaftResult<AppendResponse>;
+}
+pub struct TcpTransport {
+    peers: HashMap<String, SocketAddr>,
+    timeout: Duration,
+}
+#[async_trait]
+impl Transport for TcpTransport {
+    async fn call_vote(&self, peer: &str, request: VoteRequest) -> RaftResult<VoteResponse> {
+        let addr = self.peers.get(peer).unwrap();
+        let resp = call_peer(*addr, &RaftRequest::Vote(request), self.timeout)
+            .await
+            .unwrap();
+        match resp {
+            RaftResponse::Vote(v) => Ok(v),
+            _ => Err(error::RaftError::RpcError("unexpected response".into())),
+        }
+    }
+    async fn call_append(&self, peer: &str, request: AppendEntries) -> RaftResult<AppendResponse> {
+        let addr = self.peers.get(peer).unwrap();
+        let resp = call_peer(*addr, &RaftRequest::AppendEntries(request), self.timeout)
+            .await
+            .unwrap();
+        match resp {
+            RaftResponse::AppendEntries(a) => Ok(a),
+            _ => Err(error::RaftError::RpcError("unexpected response".into())),
+        }
+    }
 }
 
 pub(crate) async fn send_msg<T: Encode>(
@@ -91,8 +115,9 @@ pub(crate) async fn rcv_msg<T: Decode<()>>(
 pub(crate) async fn call_peer(
     addr: std::net::SocketAddr,
     request: &RaftRequest,
+    timeout: Duration,
 ) -> Result<RaftResponse, Box<dyn std::error::Error + Send + Sync>> {
-    tokio::time::timeout(Duration::from_millis(500), async {
+    tokio::time::timeout(timeout, async {
         let mut stream = TcpStream::connect(addr).await?;
         send_msg(&mut stream, request).await?;
         let response: RaftResponse = rcv_msg(&mut stream).await?;

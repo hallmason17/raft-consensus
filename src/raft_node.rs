@@ -413,7 +413,8 @@ impl RaftNode {
                 for &peer_addr in peers.values().filter(|add| **add != addr) {
                     let req = request.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = call_peer(peer_addr, &req).await {
+                        if let Err(e) = call_peer(peer_addr, &req, Duration::from_millis(500)).await
+                        {
                             tracing::debug!("Heartbeat failed to {}: {}", peer_addr, e);
                         }
                     });
@@ -596,7 +597,9 @@ impl RaftNode {
             });
             info!("Sending request: {:?}", request);
             let peer_addr = *peer_addr;
-            tasks.spawn(async move { call_peer(peer_addr, &request).await });
+            tasks.spawn(
+                async move { call_peer(peer_addr, &request, Duration::from_millis(500)).await },
+            );
         }
 
         let needed = (self.peers.len() / 2) + 1;
@@ -693,7 +696,9 @@ impl RaftNode {
                 last_log_index,
                 last_log_term,
             });
-            requests.spawn(async move { call_peer(peer_addr, &request).await });
+            requests.spawn(async move {
+                call_peer(peer_addr, &request, Duration::from_millis(500)).await
+            });
         }
 
         let needed_votes = self.peers.len() / 2 + 1;
