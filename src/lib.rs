@@ -1,7 +1,6 @@
 #![deny(clippy::pedantic)]
 pub mod error;
 pub mod raft_node;
-pub mod rpc;
 pub mod state_machine;
 use std::time::Duration;
 
@@ -74,7 +73,7 @@ pub(crate) async fn send_msg<T: Encode>(
     msg: &T,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bytes = bincode::encode_to_vec(msg, config::standard())?;
-    stream.write_u32(bytes.len() as u32).await?;
+    stream.write_u32(u32::try_from(bytes.len())?).await?;
     stream.write_all(&bytes).await?;
     Ok(())
 }

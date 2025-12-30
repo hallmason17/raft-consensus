@@ -3,10 +3,13 @@ use std::error::Error;
 use bincode::{Decode, Encode};
 
 pub trait StateMachine: Send + Sync + std::fmt::Debug {
+    /// # Errors
     fn apply(&mut self, command: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>>;
+    /// # Errors
     fn snapshot(&self) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         Ok(Vec::new())
     }
+    /// # Errors
     fn restore(&mut self, _snapshot: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }

@@ -7,7 +7,7 @@
 //!
 //! # Architecture
 //!
-//! - **NodeState**: Nodes can be Followers, Candidates, or Leaders
+//! - **`NodeState`**: Nodes can be Followers, Candidates, or Leaders
 //! - **Elections**: Triggered by election timeouts when no heartbeat is received
 //! - **Log Replication**: Leaders replicate log entries to followers
 //! - **State Machine**: A simple key-value store backed by the replicated log
@@ -112,7 +112,7 @@ pub struct RaftNode {
     /// Number of votes received in current election (used when Candidate)
     votes_received: u64,
 
-    /// CandidateId that received vote in current term (or None)
+    /// `CandidateId` that received vote in current term (or None)
     voted_for: Option<String>,
 
     /// Unique identifier for this node
@@ -174,12 +174,12 @@ impl RaftNodeConfig {
     /// # Example
     ///
     ///
-    /// let config = RaftNodeConfig::new(
-    ///     "node1".to_string(),
-    ///     "127.0.0.1:5001".parse().unwrap(),
-    ///     HashMap::from([
-    ///         ("node2".to_string(), "127.0.0.1:5002".parse().unwrap()),
-    ///         ("node3".to_string(), "127.0.0.1:5003".parse().unwrap()),
+    /// let config = `RaftNodeConfig::new`(
+    ///     "`node1".to_string()`,
+    ///     "`127.0.0.1:5001".parse().unwrap()`,
+    ///     `HashMap::from`([
+    ///         ("`node2".to_string()`, "`127.0.0.1:5002".parse().unwrap()`),
+    ///         ("`node3".to_string()`, "`127.0.0.1:5003".parse().unwrap()`),
     ///     ])
     /// );
     ///
@@ -222,7 +222,7 @@ impl RaftNode {
             next_index: HashMap::new(),
             match_index: HashMap::new(),
             log: vec![],
-            state_machine: state_machine,
+            state_machine,
         }
     }
 
@@ -235,6 +235,8 @@ impl RaftNode {
     /// # Returns
     ///
     /// An error if the node fails to run properly
+    ///
+    /// # Errors
     ///
     /// # Event Loop
     ///
@@ -253,41 +255,40 @@ impl RaftNode {
         tokio::pin!(sleep);
         loop {
             tokio::select! {
-                msg = rx.recv() => {
-                    match msg {
-                    Some(RaftMessage::VoteRequest { message, response }) => {
-                        match self.handle_vote_request(&message) {
-                            Ok(resp) => { let _ = response.send(resp); }
-                            Err(e) => { tracing::error!("Vote request error: {}", e); }
+                            msg = rx.recv() => {
+                                match msg {
+                                Some(RaftMessage::VoteRequest { message, response }) => {
+                                    match self.handle_vote_request(&message) {
+                                        Ok(resp) => { let _ = response.send(resp); }
+                                        Err(e) => { tracing::error!("Vote request error: {}", e); }
+                                    }
+                                }
+                                Some(RaftMessage::AppendEntries { message, response }) => {
+                                    let resp = self.handle_append_entries(&message);
+                                    let _ = response.send(resp);
+                                }
+                                Some(RaftMessage::ClientCommand{command, response}) => {
+                                    // TODO: Handle client commands
+                                }
+                                Some(RaftMessage::VoteResponse { .. } | RaftMessage::AppendEntriesResponse {
+            .. }) => {
+                                    tracing::warn!("Received unexpected response message in event loop");
+                                }
+                                None => break,
+                            }
+                                }
+                                () = sleep.as_mut() => {
+                                self.check_election_timeout().await?;
+                                sleep.as_mut().set(tokio::time::sleep(Self::get_random_election_timeout()));
+                            }
                         }
-                    }
-                    Some(RaftMessage::AppendEntries { message, response }) => {
-                        match self.handle_append_entries(&message) {
-                            Ok(resp) => { let _ = response.send(resp); }
-                            Err(e) => { tracing::error!("Append entries error: {}", e); }
-                        }
-                    }
-                    Some(RaftMessage::ClientCommand{command, response}) => {
-                        // TODO: Handle client commands
-                    }
-                    Some(RaftMessage::VoteResponse { .. }) | Some(RaftMessage::AppendEntriesResponse { .. }) => {
-                        tracing::warn!("Received unexpected response message in event loop");
-                    }
-                    None => break,
-                }
-                    }
-                    () = sleep.as_mut() => {
-                    self.check_election_timeout().await?;
-                    sleep.as_mut().set(tokio::time::sleep(self.get_random_election_timeout()));
-                }
-            }
         }
         Ok(())
     }
 
     /// Starts the TCP server for this node.
     ///
-    /// The server handles both Raft protocol messages (RequestVote, AppendEntries)
+    /// The server handles both Raft protocol messages (`RequestVote`, `AppendEntries`)
     /// and client operations.
     ///
     /// # Arguments
@@ -325,12 +326,9 @@ impl RaftNode {
                                 tracing::error!("Failed to send vote request!");
                                 return;
                             }
-                            let vote_resp = match response_rx.await {
-                                Ok(resp) => resp,
-                                Err(_) => {
-                                    tracing::error!("Error receiving vote response!");
-                                    return;
-                                }
+                            let Ok(vote_resp) = response_rx.await else {
+                                tracing::error!("Error receiving vote response!");
+                                return;
                             };
                             RaftResponse::Vote(vote_resp)
                         }
@@ -344,12 +342,10 @@ impl RaftNode {
                                 tracing::error!("Failed to send append request!");
                                 return;
                             }
-                            let append_resp = match response_rx.await {
-                                Ok(resp) => resp,
-                                Err(_) => {
-                                    tracing::error!("Error receiving append response!");
-                                    return;
-                                }
+
+                            let Ok(append_resp) = response_rx.await else {
+                                tracing::error!("Error receiving append response!");
+                                return;
                             };
                             RaftResponse::AppendEntries(append_resp)
                         }
@@ -389,7 +385,7 @@ impl RaftNode {
 
     /// Spawns a task that sends periodic heartbeats to all peers.
     ///
-    /// Heartbeats are empty AppendEntries requests sent every 100ms to maintain
+    /// Heartbeats are empty `AppendEntries` requests sent every 100ms to maintain
     /// leadership and prevent followers from timing out and starting elections.
     ///
     /// # Returns
@@ -434,14 +430,14 @@ impl RaftNode {
     /// # Returns
     ///
     /// A random duration between 150ms and 350ms
-    fn get_random_election_timeout(&self) -> Duration {
+    fn get_random_election_timeout() -> Duration {
         let (min, max) = (150, 350);
         let timeout_ms = rand::rng().random_range(min..=max);
         info!("New heartbeat timer: {}", timeout_ms);
         Duration::from_millis(timeout_ms)
     }
 
-    /// Handles a RequestVote RPC from a candidate node.
+    /// Handles a `RequestVote` RPC from a candidate node.
     ///
     /// Grants vote if:
     /// - Haven't voted for another candidate in this term
@@ -487,16 +483,16 @@ impl RaftNode {
 
                 info!("Granted vote to {} for term {}", *candidate_id, *term);
 
-                return Ok(VoteResponse {
+                Ok(VoteResponse {
                     term: self.current_term,
                     vote_granted: true,
-                });
+                })
             }
-            _ => return Err(RaftError::ElectionFailure {}),
+            _ => Err(RaftError::ElectionFailure {}),
         }
     }
 
-    /// Handles an AppendEntries RPC from the leader.
+    /// Handles an `AppendEntries` RPC from the leader.
     ///
     /// This handles both heartbeats (empty entries) and actual log replication.
     ///
@@ -513,7 +509,7 @@ impl RaftNode {
     /// # Returns
     ///
     /// A response indicating success/failure and the current term
-    fn handle_append_entries(&mut self, message: &AppendEntries) -> RaftResult<AppendResponse> {
+    fn handle_append_entries(&mut self, message: &AppendEntries) -> AppendResponse {
         let mut success = false;
 
         if message.term > self.current_term {
@@ -526,10 +522,10 @@ impl RaftNode {
             info!("Received heartbeat from leader");
             self.last_heartbeat = Instant::now();
             self.current_term = message.term;
-            return Ok(AppendResponse {
+            return AppendResponse {
                 term: self.current_term,
                 success: true,
-            });
+            };
         }
         if message.term >= self.current_term && message.prev_log_index == 0
             || (message.prev_log_index <= self.log.len() as u64
@@ -557,10 +553,10 @@ impl RaftNode {
 
         info!("{:?}", self);
 
-        Ok(AppendResponse {
+        AppendResponse {
             term: self.current_term,
             success,
-        })
+        }
     }
 
     /// Replicates a log entry to a majority of followers.
@@ -664,7 +660,7 @@ impl RaftNode {
     /// 1. Transition to Candidate state
     /// 2. Increment current term
     /// 3. Vote for self
-    /// 4. Send RequestVote RPCs to all peers
+    /// 4. Send `RequestVote` RPCs to all peers
     /// 5. Wait for votes:
     ///    - Become leader if receive votes from majority
     ///    - Step down if discover higher term
@@ -753,7 +749,7 @@ impl RaftNode {
     ///
     /// This occurs when:
     /// - Discovering a higher term from another node
-    /// - Receiving an AppendEntries RPC with a higher term
+    /// - Receiving an `AppendEntries` RPC with a higher term
     /// - Receiving a vote response with a higher term
     ///
     /// # Arguments
