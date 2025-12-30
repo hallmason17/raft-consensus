@@ -61,33 +61,47 @@ pub enum RaftResponse {
 
 #[async_trait]
 pub trait Transport: Send + Sync {
-    async fn call_vote(&self, peer: &str, request: VoteRequest) -> RaftResult<VoteResponse>;
-    async fn call_append(&self, peer: &str, request: AppendEntries) -> RaftResult<AppendResponse>;
+    async fn call_vote(&self, peer: String, request: VoteRequest) -> RaftResult<VoteResponse>;
+    async fn call_append(&self, peer: String, request: AppendEntries)
+    -> RaftResult<AppendResponse>;
 }
+#[derive(Debug, Clone)]
 pub struct TcpTransport {
     peers: HashMap<String, SocketAddr>,
     timeout: Duration,
 }
+impl TcpTransport {
+    #[must_use]
+    pub fn new(peers: HashMap<String, SocketAddr>, timeout: Duration) -> Self {
+        TcpTransport { peers, timeout }
+    }
+}
 #[async_trait]
 impl Transport for TcpTransport {
-    async fn call_vote(&self, peer: &str, request: VoteRequest) -> RaftResult<VoteResponse> {
-        let addr = self.peers.get(peer).unwrap();
+    async fn call_vote(&self, peer: String, request: VoteRequest) -> RaftResult<VoteResponse> {
+        let addr = self.peers.get(&peer).unwrap();
         let resp = call_peer(*addr, &RaftRequest::Vote(request), self.timeout)
             .await
             .unwrap();
         match resp {
             RaftResponse::Vote(v) => Ok(v),
-            _ => Err(error::RaftError::RpcError("unexpected response".into())),
+            RaftResponse::AppendEntries(_) => {
+                Err(error::RaftError::RpcError("unexpected response".into()))
+            }
         }
     }
-    async fn call_append(&self, peer: &str, request: AppendEntries) -> RaftResult<AppendResponse> {
-        let addr = self.peers.get(peer).unwrap();
+    async fn call_append(
+        &self,
+        peer: String,
+        request: AppendEntries,
+    ) -> RaftResult<AppendResponse> {
+        let addr = self.peers.get(&peer).unwrap();
         let resp = call_peer(*addr, &RaftRequest::AppendEntries(request), self.timeout)
             .await
             .unwrap();
         match resp {
             RaftResponse::AppendEntries(a) => Ok(a),
-            _ => Err(error::RaftError::RpcError("unexpected response".into())),
+            RaftResponse::Vote(_) => Err(error::RaftError::RpcError("unexpected response".into())),
         }
     }
 }

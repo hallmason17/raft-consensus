@@ -6,9 +6,10 @@
 //! Usage:
 //!   cargo run --example three_node_cluster
 
-use raft_consensus::{RaftNode, RaftNodeConfig};
+use raft_consensus::{RaftNode, RaftNodeConfig, TcpTransport};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::task::JoinSet;
 
 mod kv_store;
@@ -63,9 +64,11 @@ async fn main() -> anyhow::Result<()> {
     let mut tasks = JoinSet::new();
 
     for config in configs {
+        let p = peers.clone();
         tasks.spawn(async move {
             let state_machine = Box::new(KvStore::new());
-            let mut node = RaftNode::new(config, state_machine);
+            let tcp = TcpTransport::new(p.clone(), Duration::from_millis(500));
+            let mut node = RaftNode::new(config, state_machine, tcp);
             node.run().await
         });
     }

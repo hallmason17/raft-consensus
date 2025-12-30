@@ -15,31 +15,22 @@
 #![allow(unused)]
 #![deny(missing_docs)]
 use rand::Rng;
-use std::collections::HashMap;
-use std::error::Error;
-use std::net::SocketAddr;
-use std::time::Duration;
-use tokio::net::TcpListener;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
-use tokio::task::JoinSet;
+use std::{collections::HashMap, error::Error, fmt::Debug, net::SocketAddr, time::Duration};
 use tokio::time::Instant;
+use tokio::{
+    net::TcpListener,
+    sync::{mpsc, oneshot},
+    task::{JoinHandle, JoinSet},
+};
 use tracing::info;
 
-use crate::AppendEntries;
-use crate::AppendResponse;
-use crate::LogEntry;
-use crate::NodeState;
-use crate::RaftRequest;
-use crate::RaftResponse;
-use crate::VoteRequest;
-use crate::VoteResponse;
-use crate::call_peer;
-use crate::error::RaftError;
-use crate::error::RaftResult;
-use crate::state_machine::StateMachine;
-use crate::{rcv_msg, send_msg};
+use crate::{
+    AppendEntries, AppendResponse, LogEntry, NodeState, RaftRequest, RaftResponse, Transport,
+    VoteRequest, VoteResponse, call_peer,
+    error::{RaftError, RaftResult},
+    rcv_msg, send_msg,
+    state_machine::StateMachine,
+};
 
 /// Messages that can be sent to the Raft node's message processing loop.
 ///
@@ -96,7 +87,8 @@ pub enum RaftMessage {
 /// - **Leaders**: Handle all client requests and replicate log entries to followers
 #[allow(dead_code)]
 #[derive(Debug)]
-pub struct RaftNode {
+pub struct RaftNode<T: Transport> {
+    transport: T,
     /// Current state of this node (Follower, Candidate, or Leader)
     state: NodeState,
 
@@ -189,7 +181,7 @@ impl RaftNodeConfig {
     }
 }
 
-impl RaftNode {
+impl<T: Transport + Debug + Clone + 'static> RaftNode<T> {
     /// Creates a new Raft node from the given configuration.
     ///
     /// The node starts in the Follower state with term 0 and a randomized
@@ -204,9 +196,10 @@ impl RaftNode {
     ///
     /// A new `RaftNode` initialized as a Follower
     #[must_use]
-    pub fn new(config: RaftNodeConfig, state_machine: Box<dyn StateMachine>) -> Self {
+    pub fn new(config: RaftNodeConfig, state_machine: Box<dyn StateMachine>, transport: T) -> Self {
         let timeout = rand::rng().random_range(150..=300);
         RaftNode {
+            transport,
             state: NodeState::Follower,
             current_term: 0,
             commit_index: 0,
@@ -393,16 +386,18 @@ impl RaftNode {
     /// A handle to the spawned heartbeat task
     fn start_leader_heartbeat(&self) -> tokio::task::JoinHandle<()> {
         let interval = Duration::from_millis(100);
-        let request = RaftRequest::AppendEntries(AppendEntries {
+        let request = AppendEntries {
             term: self.current_term,
             leader_id: self.id.clone(),
             prev_log_index: self.get_last_log_index(),
             prev_log_term: self.get_last_log_term(),
             entries: Vec::new(),
             leader_commit: self.get_last_log_index(),
-        });
+        };
         let peers = self.peers.clone();
         let addr = self.addr;
+        let id = self.id.clone();
+        let transport = self.transport.clone();
 
         tokio::spawn(async move {
             let mut int_timer = tokio::time::interval(interval);
@@ -410,12 +405,13 @@ impl RaftNode {
             loop {
                 info!("Sending heartbeats");
                 int_timer.tick().await;
-                for &peer_addr in peers.values().filter(|add| **add != addr) {
+                for peer_id in peers.keys().filter(|pid| **pid != id) {
                     let req = request.clone();
+                    let transport = transport.clone();
+                    let pid = peer_id.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = call_peer(peer_addr, &req, Duration::from_millis(500)).await
-                        {
-                            tracing::debug!("Heartbeat failed to {}: {}", peer_addr, e);
+                        if let Err(e) = transport.call_append(pid.clone(), req).await {
+                            tracing::debug!("Heartbeat failed to {}: {}", pid, e);
                         }
                     });
                 }
