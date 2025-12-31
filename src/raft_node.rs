@@ -87,7 +87,11 @@ pub enum RaftMessage {
 /// - **Leaders**: Handle all client requests and replicate log entries to followers
 #[allow(dead_code)]
 #[derive(Debug)]
-pub struct RaftNode<T: Transport> {
+pub struct RaftNode<T, SM>
+where
+    T: Transport,
+    SM: StateMachine,
+{
     transport: T,
     /// Current state of this node (Follower, Candidate, or Leader)
     state: NodeState,
@@ -135,7 +139,7 @@ pub struct RaftNode<T: Transport> {
     log: Vec<LogEntry>,
 
     /// The store state machine
-    state_machine: Box<dyn StateMachine>,
+    state_machine: SM,
 }
 
 /// Configuration for creating a new Raft node.
@@ -181,7 +185,11 @@ impl RaftNodeConfig {
     }
 }
 
-impl<T: Transport + Debug + Clone + 'static> RaftNode<T> {
+impl<T, SM> RaftNode<T, SM>
+where
+    T: Transport + Debug + Clone + 'static,
+    SM: StateMachine + Debug,
+{
     /// Creates a new Raft node from the given configuration.
     ///
     /// The node starts in the Follower state with term 0 and a randomized
@@ -196,7 +204,7 @@ impl<T: Transport + Debug + Clone + 'static> RaftNode<T> {
     ///
     /// A new `RaftNode` initialized as a Follower
     #[must_use]
-    pub fn new(config: RaftNodeConfig, state_machine: Box<dyn StateMachine>, transport: T) -> Self {
+    pub fn new(config: RaftNodeConfig, state_machine: SM, transport: T) -> Self {
         let timeout = rand::rng().random_range(150..=300);
         RaftNode {
             transport,
@@ -238,7 +246,7 @@ impl<T: Transport + Debug + Clone + 'static> RaftNode<T> {
     /// - Append entries requests from leaders
     /// - Client commands
     /// - Election timeout checks (with randomized timing)
-    pub async fn run(&mut self) -> anyhow::Result<()> {
+    pub async fn run(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (tx, mut rx) = mpsc::channel(100);
 
         // Start the TCP server to handle incoming connections

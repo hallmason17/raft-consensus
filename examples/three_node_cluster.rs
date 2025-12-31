@@ -8,6 +8,7 @@
 
 use raft_consensus::{RaftNode, RaftNodeConfig, TcpTransport};
 use std::collections::HashMap;
+use std::error::Error;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::task::JoinSet;
@@ -16,7 +17,7 @@ mod kv_store;
 use kv_store::KvStore;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -66,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
     for config in configs {
         let p = peers.clone();
         tasks.spawn(async move {
-            let state_machine = Box::new(KvStore::new());
+            let state_machine = KvStore::new();
             let tcp = TcpTransport::new(p.clone(), Duration::from_millis(500));
             let mut node = RaftNode::new(config, state_machine, tcp);
             node.run().await
