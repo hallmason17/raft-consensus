@@ -66,6 +66,7 @@ pub trait Transport: Send + Sync {
     async fn call_vote(&self, peer: String, request: VoteRequest) -> RaftResult<VoteResponse>;
     async fn call_append(&self, peer: String, request: AppendEntries)
     -> RaftResult<AppendResponse>;
+    /// # Errors
     fn serve(&self, tx: mpsc::Sender<RaftMessage>) -> RaftResult<()>;
 }
 #[derive(Debug, Clone)]
