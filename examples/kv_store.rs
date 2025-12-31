@@ -51,8 +51,18 @@ impl Default for KvStore {
     }
 }
 
+// Custom error type.
+#[derive(Debug, thiserror::Error)]
+pub enum KvError {
+    #[error("decode error: {0}")]
+    Decode(#[from] bincode::error::DecodeError),
+    #[error("encode error: {0}")]
+    Encode(#[from] bincode::error::EncodeError),
+}
+
 impl StateMachine for KvStore {
-    fn apply(&mut self, command: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+    type Error = KvError;
+    fn apply(&mut self, command: &[u8]) -> Result<Vec<u8>, Self::Error> {
         // Deserialize the command
         let (cmd, _): (KvCommand, _) =
             bincode::decode_from_slice(command, bincode::config::standard())?;
@@ -78,13 +88,13 @@ impl StateMachine for KvStore {
         Ok(response_bytes)
     }
 
-    fn snapshot(&self) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+    fn snapshot(&self) -> Result<Vec<u8>, Self::Error> {
         // Serialize the entire HashMap as a snapshot
         let snapshot = bincode::encode_to_vec(&self.data, bincode::config::standard())?;
         Ok(snapshot)
     }
 
-    fn restore(&mut self, snapshot: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn restore(&mut self, snapshot: &[u8]) -> Result<(), Self::Error> {
         // Deserialize the snapshot and restore the HashMap
         let (data, _): (HashMap<String, String>, _) =
             bincode::decode_from_slice(snapshot, bincode::config::standard())?;
