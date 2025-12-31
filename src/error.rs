@@ -28,6 +28,18 @@ pub enum RaftError {
 
     #[error("Term mismatch: expected {expected}, got {actual}")]
     TermMismatch { expected: u64, actual: u64 },
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("encode error: {0}")]
+    Encode(#[from] bincode::error::EncodeError),
+
+    #[error("decode error: {0}")]
+    Decode(#[from] bincode::error::DecodeError),
+
+    #[error("timeout error: {0}")]
+    Timeout(#[from] tokio::time::error::Elapsed),
 }
 
 pub type RaftResult<T> = Result<T, RaftError>;

@@ -246,7 +246,7 @@ where
     /// - Append entries requests from leaders
     /// - Client commands
     /// - Election timeout checks (with randomized timing)
-    pub async fn run(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn run(&mut self) -> RaftResult<()> {
         let (tx, mut rx) = mpsc::channel(100);
 
         // Start the TCP server to handle incoming connections

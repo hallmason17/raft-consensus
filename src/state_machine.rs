@@ -1,16 +1,17 @@
-use std::error::Error;
+use std::fmt::Debug;
 
 use bincode::{Decode, Encode};
 
-pub trait StateMachine: Send + Sync + std::fmt::Debug {
+pub trait StateMachine: Send + Sync + Debug {
+    type Error: std::error::Error + Send + Sync + 'static;
     /// # Errors
-    fn apply(&mut self, command: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>>;
+    fn apply(&mut self, command: &[u8]) -> Result<Vec<u8>, Self::Error>;
     /// # Errors
-    fn snapshot(&self) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+    fn snapshot(&self) -> Result<Vec<u8>, Self::Error> {
         Ok(Vec::new())
     }
     /// # Errors
-    fn restore(&mut self, _snapshot: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn restore(&mut self, _snapshot: &[u8]) -> Result<(), Self::Error> {
         Ok(())
     }
 }
