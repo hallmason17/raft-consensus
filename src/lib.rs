@@ -89,9 +89,8 @@ impl TcpTransport {
 impl Transport for TcpTransport {
     async fn call_vote(&self, peer: String, request: VoteRequest) -> RaftResult<VoteResponse> {
         let addr = self.peers.get(&peer).unwrap();
-        let resp = call_peer(*addr, &RaftRequest::Vote(request), self.timeout)
-            .await
-            .unwrap();
+        let resp = call_peer(*addr, &RaftRequest::Vote(request), self.timeout).await?;
+
         match resp {
             RaftResponse::Vote(v) => Ok(v),
             RaftResponse::AppendEntries(_) => {
@@ -105,9 +104,7 @@ impl Transport for TcpTransport {
         request: AppendEntries,
     ) -> RaftResult<AppendResponse> {
         let addr = self.peers.get(&peer).unwrap();
-        let resp = call_peer(*addr, &RaftRequest::AppendEntries(request), self.timeout)
-            .await
-            .unwrap();
+        let resp = call_peer(*addr, &RaftRequest::AppendEntries(request), self.timeout).await?;
         match resp {
             RaftResponse::AppendEntries(a) => Ok(a),
             RaftResponse::Vote(_) => Err(error::RaftError::RpcError("unexpected response".into())),
@@ -123,62 +120,64 @@ impl Transport for TcpTransport {
         tokio::spawn(async move {
             let listener = TcpListener::bind(addr).await.unwrap();
             loop {
-                let (mut socket, _) = listener.accept().await.unwrap();
+                let (conn, _paddr) = listener.accept().await.unwrap();
                 let tx = tx.clone();
-
                 tokio::spawn(async move {
-                    // Read the incoming RPC message
-                    let request: RaftRequest = match rcv_msg(&mut socket).await {
-                        Ok(msg) => msg,
-                        Err(e) => {
-                            tracing::error!("Failed to receive message: {}", e);
-                            return;
-                        }
-                    };
-
-                    let response = match request {
-                        RaftRequest::Vote(vote_request) => {
-                            let (response_tx, response_rx) = oneshot::channel();
-                            let msg = RaftMessage::VoteRequest {
-                                message: vote_request,
-                                response: response_tx,
-                            };
-                            if tx.send(msg).await.is_err() {
-                                tracing::error!("Failed to send vote request!");
-                                return;
-                            }
-                            let Ok(vote_resp) = response_rx.await else {
-                                tracing::error!("Error receiving vote response!");
-                                return;
-                            };
-                            RaftResponse::Vote(vote_resp)
-                        }
-                        RaftRequest::AppendEntries(append_request) => {
-                            let (response_tx, response_rx) = oneshot::channel();
-                            let msg = RaftMessage::AppendEntries {
-                                message: append_request,
-                                response: response_tx,
-                            };
-                            if tx.send(msg).await.is_err() {
-                                tracing::error!("Failed to send append request!");
-                                return;
-                            }
-
-                            let Ok(append_resp) = response_rx.await else {
-                                tracing::error!("Error receiving append response!");
-                                return;
-                            };
-                            RaftResponse::AppendEntries(append_resp)
-                        }
-                    };
-
-                    if let Err(e) = send_msg(&mut socket, &response).await {
-                        tracing::error!("Failed to send response: {}", e);
-                    }
+                    handle_conn(conn, tx).await;
                 });
             }
         });
         Ok(rx)
+    }
+}
+async fn handle_conn(mut conn: TcpStream, tx: mpsc::Sender<RaftMessage>) {
+    // Read the incoming RPC message
+    let request: RaftRequest = match rcv_msg(&mut conn).await {
+        Ok(msg) => msg,
+        Err(e) => {
+            tracing::error!("Failed to receive message: {}", e);
+            return;
+        }
+    };
+
+    let response = match request {
+        RaftRequest::Vote(vote_request) => {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = RaftMessage::VoteRequest {
+                message: vote_request,
+                response: response_tx,
+            };
+            if tx.send(msg).await.is_err() {
+                tracing::error!("Failed to send vote request!");
+                return;
+            }
+            let Ok(vote_resp) = response_rx.await else {
+                tracing::error!("Error receiving vote response!");
+                return;
+            };
+            RaftResponse::Vote(vote_resp)
+        }
+        RaftRequest::AppendEntries(append_request) => {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = RaftMessage::AppendEntries {
+                message: append_request,
+                response: response_tx,
+            };
+            if tx.send(msg).await.is_err() {
+                tracing::error!("Failed to send append request!");
+                return;
+            }
+
+            let Ok(append_resp) = response_rx.await else {
+                tracing::error!("Error receiving append response!");
+                return;
+            };
+            RaftResponse::AppendEntries(append_resp)
+        }
+    };
+
+    if let Err(e) = send_msg(&mut conn, &response).await {
+        tracing::error!("Failed to send response: {}", e);
     }
 }
 

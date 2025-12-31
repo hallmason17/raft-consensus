@@ -358,7 +358,6 @@ where
     fn get_random_election_timeout() -> Duration {
         let (min, max) = (150, 350);
         let timeout_ms = rand::rng().random_range(min..=max);
-        info!("New heartbeat timer: {}", timeout_ms);
         Duration::from_millis(timeout_ms)
     }
 
