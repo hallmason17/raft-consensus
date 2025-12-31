@@ -28,7 +28,6 @@ use crate::{
     AppendEntries, AppendResponse, LogEntry, NodeState, RaftRequest, RaftResponse, Transport,
     VoteRequest, VoteResponse, call_peer,
     error::{RaftError, RaftResult},
-    rcv_msg, send_msg,
     state_machine::StateMachine,
 };
 
@@ -247,10 +246,8 @@ where
     /// - Client commands
     /// - Election timeout checks (with randomized timing)
     pub async fn run(&mut self) -> RaftResult<()> {
-        let (tx, mut rx) = mpsc::channel(100);
-
-        // Start the TCP server to handle incoming connections
-        self.transport.serve(tx)?;
+        // Start the transport layer to handle incoming connections
+        let mut rx = self.transport.start()?;
 
         let sleep = tokio::time::sleep(Duration::ZERO);
         tokio::pin!(sleep);
@@ -269,7 +266,7 @@ where
                                     let _ = response.send(resp);
                                 }
                                 Some(RaftMessage::ClientCommand{command, response}) => {
-                                    // TODO: Handle client commands
+                                    todo!()
                                 }
                                 Some(RaftMessage::VoteResponse { .. } | RaftMessage::AppendEntriesResponse {
             .. }) => {

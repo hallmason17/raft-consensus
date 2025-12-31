@@ -67,7 +67,7 @@ pub trait Transport: Send + Sync {
     async fn call_append(&self, peer: String, request: AppendEntries)
     -> RaftResult<AppendResponse>;
     /// # Errors
-    fn serve(&self, tx: mpsc::Sender<RaftMessage>) -> RaftResult<()>;
+    fn start(&self) -> RaftResult<mpsc::Receiver<RaftMessage>>;
 }
 #[derive(Debug, Clone)]
 pub struct TcpTransport {
@@ -114,9 +114,9 @@ impl Transport for TcpTransport {
         }
     }
 
-    fn serve(&self, tx: mpsc::Sender<RaftMessage>) -> RaftResult<()> {
+    fn start(&self) -> RaftResult<mpsc::Receiver<RaftMessage>> {
         let addr = self.addr;
-        let tx = tx.clone();
+        let (tx, rx) = mpsc::channel(100);
 
         info!("Cluster node starting on {}!", addr.clone());
 
@@ -178,7 +178,7 @@ impl Transport for TcpTransport {
                 });
             }
         });
-        Ok(())
+        Ok(rx)
     }
 }
 
