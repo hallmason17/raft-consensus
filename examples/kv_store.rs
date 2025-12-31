@@ -6,7 +6,6 @@
 use bincode::{Decode, Encode};
 use raft_consensus::state_machine::StateMachine;
 use std::collections::HashMap;
-use std::error::Error;
 
 /// Commands that can be executed on the key-value store.
 #[derive(Debug, Clone, Encode, Decode)]

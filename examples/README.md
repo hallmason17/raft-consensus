@@ -26,18 +26,6 @@ pub enum KvCommand {
 cargo test --example kv_store
 ```
 
-## Single Node Example (`single_node.rs`)
-
-Demonstrates setting up a single Raft node with the KV store.
-
-```bash
-# Run with default logging
-cargo run --example single_node
-
-# Run with debug logging
-RUST_LOG=debug cargo run --example single_node
-```
-
 ## Three Node Cluster (`three_node_cluster.rs`)
 
 Demonstrates a 3-node Raft cluster that can elect a leader and replicate state.
