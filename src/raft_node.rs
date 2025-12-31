@@ -250,7 +250,7 @@ where
         let (tx, mut rx) = mpsc::channel(100);
 
         // Start the TCP server to handle incoming connections
-        self.start_tcp_server(&tx);
+        self.transport.serve(tx)?;
 
         let sleep = tokio::time::sleep(Duration::ZERO);
         tokio::pin!(sleep);
@@ -285,83 +285,6 @@ where
                         }
         }
         Ok(())
-    }
-
-    /// Starts the TCP server for this node.
-    ///
-    /// The server handles both Raft protocol messages (`RequestVote`, `AppendEntries`)
-    /// and client operations.
-    ///
-    /// # Arguments
-    ///
-    /// * `tx` - Channel sender for forwarding messages to the main event loop
-    fn start_tcp_server(&self, tx: &mpsc::Sender<RaftMessage>) {
-        info!("Cluster socket listening at {}", self.addr);
-        let addr = self.addr;
-        let tx = tx.clone();
-
-        tokio::spawn(async move {
-            let listener = TcpListener::bind(addr).await.unwrap();
-            loop {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let tx = tx.clone();
-
-                tokio::spawn(async move {
-                    // Read the incoming RPC message
-                    let request: RaftRequest = match rcv_msg(&mut socket).await {
-                        Ok(msg) => msg,
-                        Err(e) => {
-                            tracing::error!("Failed to receive message: {}", e);
-                            return;
-                        }
-                    };
-
-                    let response = match request {
-                        RaftRequest::Vote(vote_request) => {
-                            let (response_tx, response_rx) = oneshot::channel();
-                            let msg = RaftMessage::VoteRequest {
-                                message: vote_request,
-                                response: response_tx,
-                            };
-                            if tx.send(msg).await.is_err() {
-                                tracing::error!("Failed to send vote request!");
-                                return;
-                            }
-                            let Ok(vote_resp) = response_rx.await else {
-                                tracing::error!("Error receiving vote response!");
-                                return;
-                            };
-                            RaftResponse::Vote(vote_resp)
-                        }
-                        RaftRequest::AppendEntries(append_request) => {
-                            let (response_tx, response_rx) = oneshot::channel();
-                            let msg = RaftMessage::AppendEntries {
-                                message: append_request,
-                                response: response_tx,
-                            };
-                            if tx.send(msg).await.is_err() {
-                                tracing::error!("Failed to send append request!");
-                                return;
-                            }
-
-                            let Ok(append_resp) = response_rx.await else {
-                                tracing::error!("Error receiving append response!");
-                                return;
-                            };
-                            RaftResponse::AppendEntries(append_resp)
-                        }
-                        _ => {
-                            tracing::error!("Unexpected message type!");
-                            return;
-                        }
-                    };
-
-                    if let Err(e) = send_msg(&mut socket, &response).await {
-                        tracing::error!("Failed to send response: {}", e);
-                    }
-                });
-            }
-        });
     }
 
     /// Starts or stops the heartbeat timer based on the node's current state.

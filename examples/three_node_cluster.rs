@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let p = peers.clone();
         tasks.spawn(async move {
             let state_machine = KvStore::new();
-            let tcp = TcpTransport::new(p.clone(), Duration::from_millis(500));
+            let tcp = TcpTransport::new(config.addr, p.clone(), Duration::from_millis(500));
             let mut node = RaftNode::new(config, state_machine, tcp);
             node.run().await
         });
