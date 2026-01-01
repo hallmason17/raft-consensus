@@ -4,7 +4,7 @@
 //! with the Raft consensus algorithm. Commands are serialized using bincode.
 
 use bincode::{Decode, Encode};
-use raft_consensus::state_machine::StateMachine;
+use raft_consensus::StateMachine;
 use std::collections::HashMap;
 
 /// Commands that can be executed on the key-value store.

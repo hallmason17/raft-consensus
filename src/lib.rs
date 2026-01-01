@@ -1,8 +1,8 @@
 #![deny(clippy::pedantic)]
 pub mod error;
 pub mod raft_node;
-pub mod state_machine;
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+pub mod rpc;
+use std::{collections::HashMap, fmt::Debug, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
 use tokio::{
@@ -12,53 +12,40 @@ use tokio::{
 };
 
 pub use raft_node::{RaftMessage, RaftNode, RaftNodeConfig};
-pub use state_machine::{LogEntry, NodeState};
 
 use bincode::{Decode, Encode, config};
 use tracing::info;
 
-use crate::error::RaftResult;
+use crate::{
+    error::{RaftError, RaftResult},
+    rpc::{AppendEntries, AppendResponse, RaftRequest, RaftResponse, VoteRequest, VoteResponse},
+};
 
-#[derive(Debug, Encode, Decode, Clone)]
-pub struct VoteRequest {
+#[derive(Debug, Clone)]
+pub enum NodeState {
+    Follower,
+    Candidate,
+    Leader,
+}
+#[derive(Debug, Clone, Decode, Encode)]
+pub struct LogEntry {
     pub term: u64,
-    pub candidate_id: String,
-    pub last_log_index: u64,
-    pub last_log_term: u64,
+    pub idx: u64,
+    pub command: Vec<u8>,
 }
 
-#[derive(Debug, Encode, Decode, Clone)]
-pub struct VoteResponse {
-    pub term: u64,
-    pub vote_granted: bool,
-}
-
-#[derive(Debug, Encode, Decode, Clone)]
-pub struct AppendEntries {
-    pub term: u64,
-    pub leader_id: String,
-    pub prev_log_index: u64,
-    pub prev_log_term: u64,
-    pub entries: Vec<LogEntry>,
-    pub leader_commit: u64,
-}
-
-#[derive(Debug, Encode, Decode, Clone)]
-pub struct AppendResponse {
-    pub term: u64,
-    pub success: bool,
-}
-
-#[derive(Debug, Encode, Decode, Clone)]
-pub enum RaftRequest {
-    Vote(VoteRequest),
-    AppendEntries(AppendEntries),
-}
-
-#[derive(Debug, Encode, Decode, Clone)]
-pub enum RaftResponse {
-    Vote(VoteResponse),
-    AppendEntries(AppendResponse),
+pub trait StateMachine: Send + Sync + Debug {
+    type Error: std::error::Error + Send + Sync + 'static;
+    /// # Errors
+    fn apply(&mut self, command: &[u8]) -> Result<Vec<u8>, Self::Error>;
+    /// # Errors
+    fn snapshot(&self) -> Result<Vec<u8>, Self::Error> {
+        Ok(Vec::new())
+    }
+    /// # Errors
+    fn restore(&mut self, _snapshot: &[u8]) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -88,14 +75,18 @@ impl TcpTransport {
 #[async_trait]
 impl Transport for TcpTransport {
     async fn call_vote(&self, peer: String, request: VoteRequest) -> RaftResult<VoteResponse> {
-        let addr = self.peers.get(&peer).unwrap();
-        let resp = call_peer(*addr, &RaftRequest::Vote(request), self.timeout).await?;
+        if let Some(addr) = self.peers.get(&peer) {
+            let resp = call_peer(*addr, &RaftRequest::Vote(request), self.timeout).await?;
 
-        match resp {
-            RaftResponse::Vote(v) => Ok(v),
-            RaftResponse::AppendEntries(_) => {
-                Err(error::RaftError::RpcError("unexpected response".into()))
+            match resp {
+                RaftResponse::Vote(v) => Ok(v),
+                RaftResponse::AppendEntries(_) => {
+                    Err(error::RaftError::RpcError("unexpected response".into()))
+                }
             }
+        } else {
+            tracing::warn!("Peer address not found!");
+            return Err(RaftError::ElectionFailure);
         }
     }
     async fn call_append(

@@ -1,4 +1,6 @@
 #![deny(clippy::pedantic)]
+#![allow(unused)]
+#![deny(missing_docs)]
 //! Raft consensus algorithm implementation.
 //!
 //! This module implements the Raft distributed consensus protocol, which allows
@@ -12,8 +14,7 @@
 //! - **Log Replication**: Leaders replicate log entries to followers
 //! - **State Machine**: A simple key-value store backed by the replicated log
 
-#![allow(unused)]
-#![deny(missing_docs)]
+use crate::Transport;
 use rand::Rng;
 use std::{collections::HashMap, error::Error, fmt::Debug, net::SocketAddr, time::Duration};
 use tokio::time::Instant;
@@ -24,11 +25,11 @@ use tokio::{
 };
 use tracing::info;
 
+use crate::StateMachine;
 use crate::{
-    AppendEntries, AppendResponse, LogEntry, NodeState, RaftRequest, RaftResponse, Transport,
-    VoteRequest, VoteResponse, call_peer,
+    LogEntry, NodeState, call_peer,
     error::{RaftError, RaftResult},
-    state_machine::StateMachine,
+    rpc::{AppendEntries, AppendResponse, RaftRequest, RaftResponse, VoteRequest, VoteResponse},
 };
 
 /// Messages that can be sent to the Raft node's message processing loop.
@@ -510,28 +511,26 @@ where
             if id == &self.id {
                 continue;
             }
-            let request = RaftRequest::AppendEntries(AppendEntries {
+            let request = AppendEntries {
                 term: self.current_term,
                 leader_id: self.id.clone(),
                 prev_log_index: self.get_last_log_index() - 1,
                 prev_log_term: self.get_last_log_term(),
                 entries: vec![entry.clone()],
                 leader_commit: self.commit_index,
-            });
+            };
             info!("Sending request: {:?}", request);
             let peer_addr = *peer_addr;
-            tasks.spawn(
-                async move { call_peer(peer_addr, &request, Duration::from_millis(500)).await },
-            );
+            let transport = self.transport.clone();
+            tasks.spawn(async move { transport.call_append(peer_addr.to_string(), request).await });
         }
 
         let needed = (self.peers.len() / 2) + 1;
         let mut success_count = 1;
+        let msg = tasks.join_next().await;
 
         while let Some(result) = tasks.join_next().await {
-            if let Ok(Ok(RaftResponse::AppendEntries(AppendResponse { success: true, .. }))) =
-                result
-            {
+            if let Ok(Ok(AppendResponse { success: true, .. })) = result {
                 success_count += 1;
                 if success_count >= needed {
                     self.commit_index += 1;
@@ -610,24 +609,24 @@ where
 
         let mut requests = JoinSet::new();
 
-        for &peer_addr in self.peers.values().filter(|addr| **addr != self.addr) {
+        for peer in self.peers.keys().filter(|pid| **pid != self.id) {
+            let pid = peer.clone();
             let last_log_index = self.get_last_log_index();
             let last_log_term = self.get_last_log_term();
-            let request = RaftRequest::Vote(VoteRequest {
+            let request = VoteRequest {
                 term: self.current_term,
                 candidate_id: self.id.clone(),
                 last_log_index,
                 last_log_term,
-            });
-            requests.spawn(async move {
-                call_peer(peer_addr, &request, Duration::from_millis(500)).await
-            });
+            };
+            let transport = self.transport.clone();
+            requests.spawn(async move { transport.call_vote(pid, request).await });
         }
 
         let needed_votes = self.peers.len() / 2 + 1;
 
         while let Some(res) = requests.join_next().await {
-            if let Ok(Ok(RaftResponse::Vote(VoteResponse { term, vote_granted }))) = res {
+            if let Ok(Ok(VoteResponse { term, vote_granted })) = res {
                 if term > self.current_term {
                     let _ = self.step_down(term);
                     requests.abort_all();
