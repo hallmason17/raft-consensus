@@ -14,8 +14,8 @@
 //! - **Log Replication**: Leaders replicate log entries to followers
 //! - **State Machine**: A simple key-value store backed by the replicated log
 
-use crate::Transport;
 use crate::state::RaftState;
+use crate::{NodeId, Transport};
 use rand::Rng;
 use std::{collections::HashMap, error::Error, fmt::Debug, net::SocketAddr, time::Duration};
 use tokio::time::Instant;
@@ -96,7 +96,7 @@ where
     transport: T,
 
     /// Unique identifier for this node
-    pub id: String,
+    pub id: NodeId,
 
     state: RaftState,
 
@@ -106,11 +106,8 @@ where
     /// Handle to the leader's heartbeat task (Some when Leader, None otherwise)
     leader_heartbeat_handle: Option<JoinHandle<()>>,
 
-    /// Timestamp of last heartbeat received from leader
-    last_heartbeat: Instant,
-
     /// Map of peer node IDs to their network addresses
-    peers: HashMap<String, SocketAddr>,
+    peers: HashMap<NodeId, SocketAddr>,
 
     /// Replicated log of commands
     log: Vec<LogEntry>,
@@ -126,7 +123,7 @@ where
 #[derive(Debug, Clone)]
 pub struct RaftNodeConfig {
     /// Unique identifier for the node
-    id: String,
+    id: NodeId,
 
     /// Network address where the node will listen
     pub addr: SocketAddr,
@@ -195,11 +192,11 @@ where
                 election_timeout_ms: Duration::from_millis(timeout),
                 next_index: HashMap::new(),
                 match_index: HashMap::new(),
+                last_heartbeat: Instant::now(),
             },
             id: config.id,
             addr: config.addr,
             leader_heartbeat_handle: None,
-            last_heartbeat: Instant::now(),
             peers: config.peers,
             log: vec![],
             state_machine,
@@ -369,21 +366,28 @@ where
                     *candidate_id, *term
                 );
 
-                if self.state.current_term == *term && self.state.voted_for.is_some() {
+                let last_log = self.log.last().cloned().unwrap_or_default();
+
+                if !self.state.should_grant_vote(
+                    *term,
+                    *last_log_index,
+                    last_log.idx,
+                    last_log.term,
+                    *last_log_term,
+                    candidate_id,
+                ) {
                     return Ok(VoteResponse {
                         term: self.state.current_term,
                         vote_granted: false,
                     });
                 }
 
-                if *term > self.state.current_term {
-                    self.state.role = NodeRole::Follower;
-                    self.state.current_term = *term;
-                    self.state.voted_for = None;
-                }
+                self.state.role = NodeRole::Follower;
+                self.state.current_term = *term;
+                self.state.voted_for = None;
 
                 self.state.voted_for = Some(candidate_id.clone());
-                self.last_heartbeat = Instant::now();
+                self.state.last_heartbeat = Instant::now();
 
                 info!("Granted vote to {} for term {}", *candidate_id, *term);
 
@@ -424,7 +428,7 @@ where
 
         if message.entries.is_empty() {
             info!("Received heartbeat from leader");
-            self.last_heartbeat = Instant::now();
+            self.state.last_heartbeat = Instant::now();
             self.state.current_term = message.term;
             return AppendResponse {
                 term: self.state.current_term,
@@ -532,9 +536,7 @@ where
     ///
     /// Ok normally, or an error if the election process fails
     async fn check_election_timeout(&mut self) -> RaftResult<()> {
-        if matches!(self.state.role, NodeRole::Follower)
-            && self.last_heartbeat.elapsed() > self.state.election_timeout_ms
-        {
+        if self.state.should_start_election() {
             let _ = self.start_election().await;
         }
         Ok(())
@@ -582,7 +584,7 @@ where
         self.state.current_term += 1;
         self.state.votes_received += 1;
         self.state.voted_for = Some(self.id.clone());
-        self.last_heartbeat = Instant::now();
+        self.state.last_heartbeat = Instant::now();
 
         info!("Starting election for term {}.", self.state.current_term);
 
@@ -671,7 +673,7 @@ where
         self.state.role = NodeRole::Follower;
         self.state.voted_for = None;
         self.state.current_term = new_term;
-        self.last_heartbeat = Instant::now();
+        self.state.last_heartbeat = Instant::now();
         self.state.votes_received = 0;
         self.start_heartbeat_timer();
         Ok(())

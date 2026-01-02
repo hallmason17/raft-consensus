@@ -28,7 +28,10 @@ pub enum NodeRole {
     Candidate,
     Leader,
 }
-#[derive(Debug, Clone, Decode, Encode)]
+
+type NodeId = String;
+
+#[derive(Debug, Clone, Decode, Encode, Default)]
 pub struct LogEntry {
     pub term: u64,
     pub idx: u64,

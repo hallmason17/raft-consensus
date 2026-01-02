@@ -16,3 +16,4 @@ async-trait = "0.1.89"
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+tokio = {version = "1", features = ["test-util", "time", "macros","rt"]}
