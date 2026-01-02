@@ -22,16 +22,12 @@ use crate::{
     rpc::{AppendEntries, AppendResponse, RaftRequest, RaftResponse, VoteRequest, VoteResponse},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum NodeRole {
+    #[default]
     Follower,
     Candidate,
     Leader,
-}
-impl Default for NodeRole {
-    fn default() -> Self {
-        NodeRole::Follower
-    }
 }
 
 type NodeId = String;
