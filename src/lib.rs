@@ -2,6 +2,7 @@
 pub mod error;
 pub mod raft_node;
 pub mod rpc;
+pub mod state;
 use std::{collections::HashMap, fmt::Debug, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
@@ -22,7 +23,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub enum NodeState {
+pub enum NodeRole {
     Follower,
     Candidate,
     Leader,
