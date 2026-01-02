@@ -28,6 +28,11 @@ pub enum NodeRole {
     Candidate,
     Leader,
 }
+impl Default for NodeRole {
+    fn default() -> Self {
+        NodeRole::Follower
+    }
+}
 
 type NodeId = String;
 
@@ -36,6 +41,12 @@ pub struct LogEntry {
     pub term: u64,
     pub idx: u64,
     pub command: Vec<u8>,
+}
+
+pub enum ElectionOutcome {
+    Won,
+    StepDown { new_term: u64 },
+    Continue,
 }
 
 pub trait StateMachine: Send + Sync + Debug {

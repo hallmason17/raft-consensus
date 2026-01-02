@@ -2,7 +2,7 @@ use std::{collections::HashMap, time::Duration};
 
 use tokio::time::Instant;
 
-use crate::{NodeId, NodeRole};
+use crate::{ElectionOutcome, NodeId, NodeRole};
 
 #[derive(Debug)]
 pub struct RaftState {
@@ -35,8 +35,28 @@ pub struct RaftState {
 
     pub last_heartbeat: Instant,
 }
+impl Default for RaftState {
+    fn default() -> Self {
+        Self {
+            role: NodeRole::default(),
+            current_term: 0,
+            commit_index: 0,
+            last_applied: 0,
+            votes_received: 0,
+            voted_for: None,
+            next_index: HashMap::new(),
+            match_index: HashMap::new(),
+            election_timeout_ms: Duration::default(),
+            last_heartbeat: Instant::now(),
+        }
+    }
+}
 
 impl RaftState {
+    #[must_use]
+    pub fn new() -> Self {
+        todo!()
+    }
     #[must_use]
     pub fn should_grant_vote(
         &self,
@@ -63,29 +83,48 @@ impl RaftState {
         matches!(self.role, NodeRole::Follower)
             && self.last_heartbeat.elapsed() > self.election_timeout_ms
     }
+
+    #[must_use]
+    pub fn should_accept_entries() -> bool {
+        todo!()
+    }
+    #[must_use]
+    pub fn calculate_commit_index() -> u64 {
+        todo!()
+    }
+
+    #[must_use]
+    pub fn process_vote_response() -> ElectionOutcome {
+        todo!()
+    }
+
+    #[must_use]
+    pub fn transition_to_follow() -> RaftState {
+        todo!()
+    }
+
+    #[must_use]
+    pub fn transition_to_candidate() -> RaftState {
+        todo!()
+    }
+
+    #[must_use]
+    pub fn transition_to_leader() -> RaftState {
+        todo!()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, time::Duration};
-
-    use tokio::time::Instant;
+    use std::time::Duration;
 
     use crate::{NodeRole, state::RaftState};
 
     #[tokio::test(start_paused = true)]
     async fn should_start_election_time_elapsed_returns_true() {
         let state = RaftState {
-            role: NodeRole::Follower,
-            current_term: 10,
-            commit_index: 10,
-            last_applied: 10,
-            votes_received: 0,
-            voted_for: None,
             election_timeout_ms: Duration::from_millis(150),
-            next_index: HashMap::new(),
-            match_index: HashMap::new(),
-            last_heartbeat: Instant::now(),
+            ..Default::default()
         };
         tokio::time::advance(Duration::from_millis(200)).await;
         assert!(state.should_start_election());
@@ -94,18 +133,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn should_start_election_time_not_elapsed_returns_false() {
         let state = RaftState {
-            role: NodeRole::Follower,
-            current_term: 10,
-            commit_index: 10,
-            last_applied: 10,
-            votes_received: 0,
-            voted_for: None,
             election_timeout_ms: Duration::from_millis(150),
-            next_index: HashMap::new(),
-            match_index: HashMap::new(),
-            last_heartbeat: Instant::now(),
+            ..Default::default()
         };
-        tokio::time::advance(Duration::from_millis(100)).await;
         assert!(!state.should_start_election());
     }
 
@@ -113,15 +143,7 @@ mod tests {
     fn should_start_election_currently_candidate_returns_false() {
         let state = RaftState {
             role: NodeRole::Candidate,
-            current_term: 10,
-            commit_index: 10,
-            last_applied: 10,
-            votes_received: 0,
-            voted_for: None,
-            election_timeout_ms: Duration::from_millis(150),
-            next_index: HashMap::new(),
-            match_index: HashMap::new(),
-            last_heartbeat: Instant::now(),
+            ..Default::default()
         };
         assert!(!state.should_start_election());
     }
@@ -130,15 +152,7 @@ mod tests {
     fn should_start_election_currently_leader_returns_false() {
         let state = RaftState {
             role: NodeRole::Leader,
-            current_term: 10,
-            commit_index: 10,
-            last_applied: 10,
-            votes_received: 0,
-            voted_for: None,
-            election_timeout_ms: Duration::from_millis(150),
-            next_index: HashMap::new(),
-            match_index: HashMap::new(),
-            last_heartbeat: Instant::now(),
+            ..Default::default()
         };
         assert!(!state.should_start_election());
     }
@@ -146,16 +160,9 @@ mod tests {
     #[test]
     fn should_grant_vote_prev_term_returns_false() {
         let state = RaftState {
-            role: NodeRole::Follower,
             current_term: 10,
             commit_index: 10,
-            last_applied: 10,
-            votes_received: 0,
-            voted_for: None,
-            election_timeout_ms: Duration::from_millis(150),
-            next_index: HashMap::new(),
-            match_index: HashMap::new(),
-            last_heartbeat: Instant::now(),
+            ..Default::default()
         };
         let voted = state.should_grant_vote(5, 10, 10, 10, 10, &"node1".to_string());
         assert!(!voted);
@@ -164,16 +171,9 @@ mod tests {
     #[test]
     fn should_grant_vote_old_log_returns_false() {
         let state = RaftState {
-            role: NodeRole::Follower,
             current_term: 10,
             commit_index: 10,
-            last_applied: 10,
-            votes_received: 0,
-            voted_for: None,
-            election_timeout_ms: Duration::from_millis(150),
-            next_index: HashMap::new(),
-            match_index: HashMap::new(),
-            last_heartbeat: Instant::now(),
+            ..Default::default()
         };
         let voted = state.should_grant_vote(state.current_term, 10, 10, 9, 9, &"node1".to_string());
         assert!(!voted);
@@ -182,16 +182,10 @@ mod tests {
     #[test]
     fn should_grant_vote_already_voted_for_different_node_returns_false() {
         let state = RaftState {
-            role: NodeRole::Follower,
             current_term: 10,
             commit_index: 10,
-            last_applied: 10,
-            votes_received: 0,
             voted_for: Some(String::from("node2")),
-            election_timeout_ms: Duration::from_millis(150),
-            next_index: HashMap::new(),
-            match_index: HashMap::new(),
-            last_heartbeat: Instant::now(),
+            ..Default::default()
         };
         let voted =
             state.should_grant_vote(state.current_term, 10, 10, 10, 10, &"node1".to_string());
@@ -201,16 +195,10 @@ mod tests {
     #[test]
     fn should_grant_vote_voted_for_node_returns_true() {
         let state = RaftState {
-            role: NodeRole::Follower,
             current_term: 10,
             commit_index: 10,
-            last_applied: 10,
-            votes_received: 0,
             voted_for: Some(String::from("node1")),
-            election_timeout_ms: Duration::from_millis(150),
-            next_index: HashMap::new(),
-            match_index: HashMap::new(),
-            last_heartbeat: Instant::now(),
+            ..Default::default()
         };
         let voted =
             state.should_grant_vote(state.current_term, 10, 10, 10, 10, &"node1".to_string());
@@ -220,16 +208,9 @@ mod tests {
     #[test]
     fn should_grant_vote_not_voted_returns_true() {
         let state = RaftState {
-            role: NodeRole::Follower,
             current_term: 10,
             commit_index: 10,
-            last_applied: 10,
-            votes_received: 0,
-            voted_for: None,
-            election_timeout_ms: Duration::from_millis(150),
-            next_index: HashMap::new(),
-            match_index: HashMap::new(),
-            last_heartbeat: Instant::now(),
+            ..Default::default()
         };
         let voted =
             state.should_grant_vote(state.current_term, 10, 10, 10, 10, &"node1".to_string());

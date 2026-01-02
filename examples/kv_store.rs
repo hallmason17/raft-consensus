@@ -210,4 +210,5 @@ mod tests {
     }
 }
 
+#[allow(dead_code)]
 fn main() {}
