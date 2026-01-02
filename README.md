@@ -4,7 +4,7 @@ A Rust implementation of the [Raft distributed consensus algorithm](https://raft
 
 ## Overview
 
-This library provides a clean implementation of Raft with a pluggable transport layer. It was extracted from a database project and designed to be easy to integrate into other systems.
+An implementation of Raft with a pluggable transport layer. It was extracted from a database project of mine and designed to be easy to integrate into other systems.
 
 **Key features:**
 - Async/await with Tokio runtime
@@ -13,14 +13,6 @@ This library provides a clean implementation of Raft with a pluggable transport 
 - Pluggable state machine via the `StateMachine` trait
 - Leader election and log replication
 
-## Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-raft-consensus = { git = "https://github.com/hallmason17/raft-consensus" }
-```
 
 ## Quick Start
 
