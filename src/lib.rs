@@ -32,10 +32,9 @@ pub enum NodeRole {
 
 type NodeId = String;
 
-#[derive(Debug, Clone, Decode, Encode, Default)]
+#[derive(Debug, Clone, Decode, Encode, Default, PartialEq, PartialOrd)]
 pub struct LogEntry {
     pub term: u64,
-    pub idx: u64,
     pub command: Vec<u8>,
 }
 

@@ -14,7 +14,9 @@
 //! - **Log Replication**: Leaders replicate log entries to followers
 //! - **State Machine**: A simple key-value store backed by the replicated log
 
-use crate::state::RaftState;
+use crate::state::{
+    RaftState, transition_to_candidate, transition_to_follower, transition_to_leader,
+};
 use crate::{NodeId, Transport};
 use rand::Rng;
 use std::{collections::HashMap, error::Error, fmt::Debug, net::SocketAddr, time::Duration};
@@ -24,7 +26,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     task::{JoinHandle, JoinSet},
 };
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::StateMachine;
 use crate::{
@@ -183,16 +185,8 @@ where
         RaftNode {
             transport,
             state: RaftState {
-                role: NodeRole::Follower,
-                current_term: 0,
-                commit_index: 0,
-                last_applied: 0,
-                votes_received: 0,
-                voted_for: None,
                 election_timeout_ms: Duration::from_millis(timeout),
-                next_index: HashMap::new(),
-                match_index: HashMap::new(),
-                last_heartbeat: Instant::now(),
+                ..Default::default()
             },
             id: config.id,
             addr: config.addr,
@@ -308,7 +302,7 @@ where
             let mut int_timer = tokio::time::interval(interval);
             int_timer.tick().await;
             loop {
-                info!("Sending heartbeats");
+                info!("[{}]: Sending heartbeats", id);
                 int_timer.tick().await;
                 for peer_id in peers.keys().filter(|pid| **pid != id) {
                     let req = request.clone();
@@ -362,8 +356,8 @@ where
                 last_log_term,
             } => {
                 info!(
-                    "Handling vote request from {} for term {}",
-                    *candidate_id, *term
+                    "[{}]: Handling vote request from {} for term {}",
+                    self.id, *candidate_id, *term
                 );
 
                 let last_log = self.log.last().cloned().unwrap_or_default();
@@ -371,8 +365,8 @@ where
                 if !self.state.should_grant_vote(
                     *term,
                     *last_log_index,
-                    last_log.idx,
-                    last_log.term,
+                    self.get_last_log_index(),
+                    self.get_last_log_term(),
                     *last_log_term,
                     candidate_id,
                 ) {
@@ -384,12 +378,13 @@ where
 
                 self.state.role = NodeRole::Follower;
                 self.state.current_term = *term;
-                self.state.voted_for = None;
-
                 self.state.voted_for = Some(candidate_id.clone());
                 self.state.last_heartbeat = Instant::now();
 
-                info!("Granted vote to {} for term {}", *candidate_id, *term);
+                info!(
+                    "[{}]: Granted vote to {} for term {}",
+                    self.id, *candidate_id, *term
+                );
 
                 Ok(VoteResponse {
                     term: self.state.current_term,
@@ -427,7 +422,7 @@ where
         }
 
         if message.entries.is_empty() {
-            info!("Received heartbeat from leader");
+            info!("[{}]: Received heartbeat from leader", self.id);
             self.state.last_heartbeat = Instant::now();
             self.state.current_term = message.term;
             return AppendResponse {
@@ -435,15 +430,16 @@ where
                 success: true,
             };
         }
-        if message.term >= self.state.current_term && message.prev_log_index == 0
-            || (message.prev_log_index <= self.log.len() as u64
-                && self.log[usize::try_from(message.prev_log_index).unwrap_or(1) - 1].term
-                    == message.prev_log_term)
-        {
+        if self.state.should_accept_entries(
+            &self.log,
+            message.term,
+            message.prev_log_index,
+            message.prev_log_term,
+        ) {
             success = true;
             let start_idx = usize::try_from(message.prev_log_index).unwrap_or(0);
             for entry in &message.entries {
-                info!("Adding {:?} to log from leader!", entry);
+                info!("[{}]: Adding {:?} to log from leader!", self.id, entry);
                 if start_idx < self.log.len() {
                     self.log[start_idx] = entry.clone();
                 } else {
@@ -453,13 +449,9 @@ where
         }
 
         if message.leader_commit > self.state.commit_index && !message.entries.is_empty() {
-            self.state.commit_index =
-                std::cmp::min(message.leader_commit, message.entries.last().unwrap().idx);
+            self.state.commit_index = message.leader_commit;
+            self.apply_log_entries();
         }
-
-        // self.apply_log_entries()?;
-
-        info!("{:?}", self);
 
         AppendResponse {
             term: self.state.current_term,
@@ -486,7 +478,7 @@ where
     async fn replicate_log(&mut self, index: u64) -> RaftResult<()> {
         let entry = self
             .log
-            .get(usize::try_from(index).unwrap_or(1) - 1)
+            .get(usize::try_from(index).unwrap_or(0))
             .expect("No log entries")
             .clone();
         let mut tasks = JoinSet::new();
@@ -497,12 +489,12 @@ where
             let request = AppendEntries {
                 term: self.state.current_term,
                 leader_id: self.id.clone(),
-                prev_log_index: self.get_last_log_index() - 1,
+                prev_log_index: self.get_last_log_index(),
                 prev_log_term: self.get_last_log_term(),
                 entries: vec![entry.clone()],
                 leader_commit: self.state.commit_index,
             };
-            info!("Sending request: {:?}", request);
+            info!("[{}]: Sending request: {:?}", self.id, request);
             let peer_addr = *peer_addr;
             let transport = self.transport.clone();
             tasks.spawn(async move { transport.call_append(peer_addr.to_string(), request).await });
@@ -537,7 +529,7 @@ where
     /// Ok normally, or an error if the election process fails
     async fn check_election_timeout(&mut self) -> RaftResult<()> {
         if self.state.should_start_election() {
-            let _ = self.start_election().await;
+            self.start_election().await?;
         }
         Ok(())
     }
@@ -557,7 +549,7 @@ where
     ///
     /// The index of the last log entry, or 0 if the log is empty
     fn get_last_log_index(&self) -> u64 {
-        self.log.last().map_or(0, |e| e.idx)
+        self.log.len() as u64
     }
 
     /// Starts a leader election for this node.
@@ -580,13 +572,14 @@ where
     ///
     /// Returns `RaftError::ElectionFailure` if unable to win the election
     async fn start_election(&mut self) -> RaftResult<()> {
-        self.state.role = NodeRole::Candidate;
-        self.state.current_term += 1;
-        self.state.votes_received += 1;
-        self.state.voted_for = Some(self.id.clone());
-        self.state.last_heartbeat = Instant::now();
+        self.state = transition_to_candidate(&self.state, &self.id);
 
-        info!("Starting election for term {}.", self.state.current_term);
+        info!(
+            "[{}]: Starting election for term {}.",
+            self.id, self.state.current_term
+        );
+
+        info!("{:?}", self.state);
 
         let mut requests = JoinSet::new();
 
@@ -609,7 +602,7 @@ where
         while let Some(res) = requests.join_next().await {
             if let Ok(Ok(VoteResponse { term, vote_granted })) = res {
                 if term > self.state.current_term {
-                    let _ = self.step_down(term);
+                    self.step_down(term)?;
                     requests.abort_all();
                     return Ok(());
                 }
@@ -617,8 +610,8 @@ where
                 if vote_granted {
                     self.state.votes_received += 1;
                     if usize::try_from(self.state.votes_received).unwrap_or(0) >= needed_votes {
-                        info!("Election succeeded, becoming leader");
-                        let _ = self.become_leader();
+                        info!("[{}]: Election succeeded, becoming leader", self.id);
+                        self.become_leader()?;
                         requests.abort_all();
                         return Ok(());
                     }
@@ -627,7 +620,7 @@ where
         }
 
         if !matches!(self.state.role, NodeRole::Leader) {
-            info!("Election failed, not enough votes");
+            info!("[{}]:Election failed, not enough votes", self.id);
             self.state.role = NodeRole::Follower;
             self.state.voted_for = None;
             self.state.votes_received = 0;
@@ -647,8 +640,8 @@ where
     /// Ok(()) on successful transition
     #[tracing::instrument]
     fn become_leader(&mut self) -> RaftResult<()> {
-        info!("Becoming leader");
-        self.state.role = NodeRole::Leader;
+        info!("[{}]: Becoming leader", self.id);
+        self.state = transition_to_leader(&self.state);
         self.start_heartbeat_timer();
         Ok(())
     }
@@ -669,33 +662,20 @@ where
     /// Ok(()) on successful transition
     #[tracing::instrument]
     fn step_down(&mut self, new_term: u64) -> RaftResult<()> {
-        info!("Stepping down");
-        self.state.role = NodeRole::Follower;
-        self.state.voted_for = None;
-        self.state.current_term = new_term;
-        self.state.last_heartbeat = Instant::now();
-        self.state.votes_received = 0;
+        info!("[{}]: Stepping down", self.id);
+        self.state = transition_to_follower(&self.state, new_term);
         self.start_heartbeat_timer();
         Ok(())
     }
 
-    /*
     #[tracing::instrument]
     fn apply_log_entries(&mut self) -> RaftResult<()> {
-        while self.last_applied < self.commit_index {
-            let entry = &self.log[usize::try_from(self.last_applied).unwrap_or(0)];
+        while self.state.last_applied < self.state.commit_index {
+            let entry = &self.log[usize::try_from(self.state.last_applied).unwrap_or(0)];
+            self.state_machine.apply(&entry.command);
 
-            match &entry.command {
-                Command::Set { key, value } => {
-                    self.store.insert(key.clone(), value.clone());
-                }
-                Command::Delete { key } => {
-                    self.store.remove(key);
-                }
-            }
-            self.last_applied += 1;
+            self.state.last_applied += 1;
         }
         Ok(())
     }
-     */
 }

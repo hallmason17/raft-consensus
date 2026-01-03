@@ -2,9 +2,9 @@ use std::{collections::HashMap, time::Duration};
 
 use tokio::time::Instant;
 
-use crate::{ElectionOutcome, NodeId, NodeRole};
+use crate::{ElectionOutcome, LogEntry, NodeId, NodeRole};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RaftState {
     /// Current state of this node (Follower, Candidate, or Leader)
     pub role: NodeRole,
@@ -85,32 +85,63 @@ impl RaftState {
     }
 
     #[must_use]
-    pub fn should_accept_entries() -> bool {
-        todo!()
-    }
-    #[must_use]
-    pub fn calculate_commit_index() -> u64 {
-        todo!()
+    pub fn should_accept_entries(
+        &self,
+        log: &[LogEntry],
+        request_term: u64,
+        prev_log_index: u64,
+        prev_log_term: u64,
+    ) -> bool {
+        if request_term >= self.current_term
+            && log
+                .get(usize::try_from(prev_log_index).unwrap_or(0))
+                .cloned()
+                .unwrap_or_default()
+                .term
+                == prev_log_term
+        {
+            return true;
+        }
+        false
     }
 
     #[must_use]
     pub fn process_vote_response() -> ElectionOutcome {
         todo!()
     }
+}
 
-    #[must_use]
-    pub fn transition_to_follow() -> RaftState {
-        todo!()
+#[must_use]
+pub fn transition_to_follower(current: &RaftState, new_term: u64) -> RaftState {
+    RaftState {
+        role: NodeRole::Follower,
+        current_term: new_term,
+        votes_received: 0,
+        voted_for: None,
+        last_heartbeat: Instant::now(),
+        ..current.clone()
     }
+}
 
-    #[must_use]
-    pub fn transition_to_candidate() -> RaftState {
-        todo!()
+#[must_use]
+pub fn transition_to_candidate(current: &RaftState, id: &NodeId) -> RaftState {
+    RaftState {
+        role: NodeRole::Candidate,
+        current_term: current.current_term + 1,
+        votes_received: current.votes_received + 1,
+        voted_for: Some(id.clone()),
+        last_heartbeat: Instant::now(),
+        ..current.clone()
     }
+}
 
-    #[must_use]
-    pub fn transition_to_leader() -> RaftState {
-        todo!()
+#[must_use]
+pub fn transition_to_leader(current: &RaftState) -> RaftState {
+    RaftState {
+        role: NodeRole::Leader,
+        votes_received: 0,
+        voted_for: None,
+        ..current.clone()
     }
 }
 
