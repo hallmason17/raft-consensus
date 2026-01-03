@@ -2,6 +2,7 @@
 pub mod error;
 pub mod raft_node;
 pub mod rpc;
+pub mod state;
 use std::{collections::HashMap, fmt::Debug, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
@@ -21,17 +22,26 @@ use crate::{
     rpc::{AppendEntries, AppendResponse, RaftRequest, RaftResponse, VoteRequest, VoteResponse},
 };
 
-#[derive(Debug, Clone)]
-pub enum NodeState {
+#[derive(Debug, Clone, Default)]
+pub enum NodeRole {
+    #[default]
     Follower,
     Candidate,
     Leader,
 }
-#[derive(Debug, Clone, Decode, Encode)]
+
+type NodeId = String;
+
+#[derive(Debug, Clone, Decode, Encode, Default, PartialEq, PartialOrd)]
 pub struct LogEntry {
     pub term: u64,
-    pub idx: u64,
     pub command: Vec<u8>,
+}
+
+pub enum ElectionOutcome {
+    Won,
+    StepDown { new_term: u64 },
+    Continue,
 }
 
 pub trait StateMachine: Send + Sync + Debug {

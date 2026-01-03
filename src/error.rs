@@ -22,8 +22,8 @@ pub enum RaftError {
 
     #[error("Invalid state transition from {from:?} to {to:?}")]
     InvalidStateTransition {
-        from: crate::NodeState,
-        to: crate::NodeState,
+        from: crate::NodeRole,
+        to: crate::NodeRole,
     },
 
     #[error("Term mismatch: expected {expected}, got {actual}")]
