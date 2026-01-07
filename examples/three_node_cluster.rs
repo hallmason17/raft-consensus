@@ -38,7 +38,10 @@ fn build_client_addrs() -> Result<Vec<(String, SocketAddr)>, Box<dyn Error + Sen
         .collect()
 }
 
-async fn send_command(addr: &SocketAddr, cmd: &KvCommand) -> Result<Option<KvResponse>, Box<dyn Error + Send + Sync>> {
+async fn send_command(
+    addr: &SocketAddr,
+    cmd: &KvCommand,
+) -> Result<Option<KvResponse>, Box<dyn Error + Send + Sync>> {
     let mut stream = TcpStream::connect(addr).await?;
     let cmd_bytes = bincode::encode_to_vec(cmd, bincode::config::standard())?;
 
@@ -53,7 +56,8 @@ async fn send_command(addr: &SocketAddr, cmd: &KvCommand) -> Result<Option<KvRes
         return Ok(None);
     }
 
-    let (response, _): (KvResponse, _) = bincode::decode_from_slice(&buf, bincode::config::standard())?;
+    let (response, _): (KvResponse, _) =
+        bincode::decode_from_slice(&buf, bincode::config::standard())?;
     Ok(Some(response))
 }
 
@@ -72,7 +76,9 @@ async fn run_client_demo(client_addrs: Vec<(String, SocketAddr)>) -> Result<(), 
             Ok(Some(response)) => {
                 println!("  Set command succeeded on {}: {:?}\n", node_name, response);
 
-                let get_cmd = KvCommand::Get { key: "hello".to_string() };
+                let get_cmd = KvCommand::Get {
+                    key: "hello".to_string(),
+                };
                 match send_command(addr, &get_cmd).await {
                     Ok(Some(response)) => println!("  Get command result: {:?}\n", response),
                     Ok(None) => println!("  Get returned empty response\n"),
@@ -118,7 +124,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
         tasks.spawn(async move {
             let config = RaftNodeConfig::new(node_id, raft_addr, peers.clone());
-            let transport = TcpTransport::new(raft_addr, client_addr, peers, Duration::from_millis(5000));
+            let transport =
+                TcpTransport::new(raft_addr, client_addr, peers, Duration::from_millis(5000));
             let mut node = RaftNode::new(config, KvStore::new(), transport);
             node.run().await
         });
