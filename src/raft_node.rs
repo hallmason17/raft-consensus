@@ -71,10 +71,10 @@ pub enum RaftMessage {
     },
     /// Client request to retrieve a value from the key-value store.
     ClientCommand {
-        /// The key to retrieve
+        /// The command bytes
         command: Vec<u8>,
         /// Channel to send the response back to the client
-        response: oneshot::Sender<Result<Vec<u8>, Box<dyn Error + Send + Sync>>>,
+        response: oneshot::Sender<Result<Vec<u8>, RaftError>>,
     },
 }
 
@@ -234,10 +234,11 @@ where
                                 }
                                 Some(RaftMessage::AppendEntries { message, response }) => {
                                     let resp = self.handle_append_entries(&message);
-                                    let _ = response.send(resp);
+                                    response.send(resp);
                                 }
                                 Some(RaftMessage::ClientCommand{command, response}) => {
-                                    todo!()
+                                    let resp = self.handle_client_command(&command).await;
+                                    response.send(resp);
                                 }
                                 Some(RaftMessage::VoteResponse { .. } | RaftMessage::AppendEntriesResponse {
             .. }) => {
@@ -253,6 +254,27 @@ where
                         }
         }
         Ok(())
+    }
+
+    async fn handle_client_command(&mut self, command: &[u8]) -> RaftResult<Vec<u8>> {
+        if !matches!(self.state.role, NodeRole::Leader) {
+            return Err(RaftError::NotLeader);
+        }
+        let entry = LogEntry {
+            term: self.state.current_term,
+            command: command.to_vec(),
+        };
+        self.log.push(entry);
+        let log_index = self.get_last_log_index();
+
+        self.replicate_log(log_index).await?;
+
+        let res = self
+            .state_machine
+            .apply(command)
+            .map_err(|e| RaftError::StateMachineError(e.to_string()))?;
+
+        Ok(res)
     }
 
     /// Starts or stops the heartbeat timer based on the node's current state.
@@ -476,12 +498,20 @@ where
     ///
     /// Returns `RaftError::ReplicationFailure` if unable to replicate to a majority
     async fn replicate_log(&mut self, index: u64) -> RaftResult<()> {
-        let entry = self
-            .log
-            .get(usize::try_from(index).unwrap_or(0))
-            .expect("No log entries")
-            .clone();
+        let array_index = usize::try_from(index).unwrap_or(0).saturating_sub(1);
+        let entry = self.log.get(array_index).expect("No log entries").clone();
         let mut tasks = JoinSet::new();
+
+        let prev_log_index = index.saturating_sub(1);
+        let prev_log_term = if prev_log_index == 0 {
+            0
+        } else {
+            let prev_array_index = usize::try_from(prev_log_index)
+                .unwrap_or(0)
+                .saturating_sub(1);
+            self.log.get(prev_array_index).map_or(0, |e| e.term)
+        };
+
         for (id, peer_addr) in &self.peers {
             if id == &self.id {
                 continue;
@@ -489,15 +519,15 @@ where
             let request = AppendEntries {
                 term: self.state.current_term,
                 leader_id: self.id.clone(),
-                prev_log_index: self.get_last_log_index(),
-                prev_log_term: self.get_last_log_term(),
+                prev_log_index,
+                prev_log_term,
                 entries: vec![entry.clone()],
                 leader_commit: self.state.commit_index,
             };
             info!("[{}]: Sending request: {:?}", self.id, request);
-            let peer_addr = *peer_addr;
+            let peer_id = id.clone();
             let transport = self.transport.clone();
-            tasks.spawn(async move { transport.call_append(peer_addr.to_string(), request).await });
+            tasks.spawn(async move { transport.call_append(peer_id, request).await });
         }
 
         let needed = (self.peers.len() / 2) + 1;

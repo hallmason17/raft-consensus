@@ -12,14 +12,14 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
+pub use error::{RaftError, RaftResult};
 pub use raft_node::{RaftMessage, RaftNode, RaftNodeConfig};
 
 use bincode::{Decode, Encode, config};
 use tracing::info;
 
-use crate::{
-    error::{RaftError, RaftResult},
-    rpc::{AppendEntries, AppendResponse, RaftRequest, RaftResponse, VoteRequest, VoteResponse},
+use crate::rpc::{
+    AppendEntries, AppendResponse, RaftRequest, RaftResponse, VoteRequest, VoteResponse,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -65,18 +65,27 @@ pub trait Transport: Send + Sync {
     -> RaftResult<AppendResponse>;
     /// # Errors
     fn start(&self) -> RaftResult<mpsc::Receiver<RaftMessage>>;
+    /// # Errors
+    async fn send_client_command(&self, addr: SocketAddr, command: Vec<u8>) -> RaftResult<Vec<u8>>;
 }
 #[derive(Debug, Clone)]
 pub struct TcpTransport {
     addr: SocketAddr,
+    client_addr: SocketAddr,
     peers: HashMap<String, SocketAddr>,
     timeout: Duration,
 }
 impl TcpTransport {
     #[must_use]
-    pub fn new(addr: SocketAddr, peers: HashMap<String, SocketAddr>, timeout: Duration) -> Self {
+    pub fn new(
+        addr: SocketAddr,
+        client_addr: SocketAddr,
+        peers: HashMap<String, SocketAddr>,
+        timeout: Duration,
+    ) -> Self {
         TcpTransport {
             addr,
+            client_addr,
             peers,
             timeout,
         }
@@ -114,21 +123,54 @@ impl Transport for TcpTransport {
 
     fn start(&self) -> RaftResult<mpsc::Receiver<RaftMessage>> {
         let addr = self.addr;
+        let client_addr = self.client_addr;
         let (tx, rx) = mpsc::channel(100);
 
-        info!("Cluster node starting on {}!", addr.clone());
+        info!(
+            "Cluster node starting on {} (raft) and {} (client)!",
+            addr, client_addr
+        );
 
+        let tx_raft = tx.clone();
         tokio::spawn(async move {
             let listener = TcpListener::bind(addr).await.unwrap();
             loop {
                 let (conn, _paddr) = listener.accept().await.unwrap();
-                let tx = tx.clone();
+                let tx = tx_raft.clone();
                 tokio::spawn(async move {
                     handle_conn(conn, tx).await;
                 });
             }
         });
+
+        tokio::spawn(async move {
+            let listener = TcpListener::bind(client_addr).await.unwrap();
+            loop {
+                let (conn, _paddr) = listener.accept().await.unwrap();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    handle_client_conn(conn, tx).await;
+                });
+            }
+        });
+
         Ok(rx)
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    async fn send_client_command(&self, addr: SocketAddr, command: Vec<u8>) -> RaftResult<Vec<u8>> {
+        tokio::time::timeout(self.timeout, async {
+            let mut stream = TcpStream::connect(addr).await?;
+
+            stream.write_u32(command.len() as u32).await?;
+            stream.write_all(&command).await?;
+
+            let len = stream.read_u32().await?;
+            let mut buf = vec![0u8; len as usize];
+            stream.read_exact(&mut buf).await?;
+            Ok(buf)
+        })
+        .await?
     }
 }
 async fn handle_conn(mut conn: TcpStream, tx: mpsc::Sender<RaftMessage>) {
@@ -179,6 +221,55 @@ async fn handle_conn(mut conn: TcpStream, tx: mpsc::Sender<RaftMessage>) {
 
     if let Err(e) = send_msg(&mut conn, &response).await {
         tracing::error!("Failed to send response: {}", e);
+    }
+}
+
+async fn handle_client_conn(mut conn: TcpStream, tx: mpsc::Sender<RaftMessage>) {
+    // Read command length and bytes
+    let len = match conn.read_u32().await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!("Failed to read command length: {}", e);
+            return;
+        }
+    };
+
+    let mut command = vec![0u8; len as usize];
+    if let Err(e) = conn.read_exact(&mut command).await {
+        tracing::error!("Failed to read command: {}", e);
+        return;
+    }
+
+    let (response_tx, response_rx) = oneshot::channel();
+    let msg = RaftMessage::ClientCommand {
+        command,
+        response: response_tx,
+    };
+
+    if tx.send(msg).await.is_err() {
+        tracing::error!("Failed to send client command to Raft node");
+        return;
+    }
+
+    let result = match response_rx.await {
+        Ok(Ok(response_bytes)) => response_bytes,
+        Ok(Err(e)) => {
+            tracing::error!("Client command error: {}", e);
+            vec![]
+        }
+        Err(e) => {
+            tracing::error!("Failed to receive response: {}", e);
+            return;
+        }
+    };
+
+    #[allow(clippy::cast_possible_truncation)]
+    if let Err(e) = conn.write_u32(result.len() as u32).await {
+        tracing::error!("Failed to write response length: {}", e);
+        return;
+    }
+    if let Err(e) = conn.write_all(&result).await {
+        tracing::error!("Failed to write response: {}", e);
     }
 }
 
