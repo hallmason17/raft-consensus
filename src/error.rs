@@ -40,6 +40,9 @@ pub enum RaftError {
 
     #[error("timeout error: {0}")]
     Timeout(#[from] tokio::time::error::Elapsed),
+
+    #[error("state machine error: {0}")]
+    StateMachineError(String),
 }
 
 pub type RaftResult<T> = Result<T, RaftError>;
